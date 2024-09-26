@@ -1,0 +1,6 @@
+opencv-python
+flask
+Pillow
+pika
+pyzmq
+
