@@ -71,7 +71,7 @@ class DatabaseManager:
             VALUES (?, ?, ?)
         ''', payloads)
         self.conn.commit()
-        print('Added to payload db ---')
+        logger.info('Added to payload db ---')
 
     def update_payload_status(self, v_id, status):
         """Update the status of a payload in the database."""
@@ -106,7 +106,7 @@ class ReceiveData:
         self.subscriber = self.context.socket(zmq.SUB)
         self.subscriber.connect(endpoint)
         self.subscriber.setsockopt_string(zmq.SUBSCRIBE, topic)
-        print(f"Connected to {endpoint} and waiting for messages on topic '{topic}'...")
+        logger.info(f"Connected to {endpoint} and waiting for messages on topic '{topic}'...")
 
     def get_data(self):
         """Attempts to receive data from the ZeroMQ subscriber.
@@ -118,7 +118,7 @@ class ReceiveData:
             self.message = self.subscriber.recv(flags=zmq.NOBLOCK)  # Non-blocking call
             self.serialized_combined_data = self.message.decode('utf-8')
             images_json = json.loads(self.message)
-            print("#[storage manager] Got Data")
+            logger.info("#[storage manager] Got Data")
 
             return images_json
 
@@ -128,11 +128,11 @@ class ReceiveData:
             return None
             
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON: {e}")
+            logger.error(f"Error decoding JSON: {e}")
             return None
 
         except Exception as e:
-            print(f"Unexpected error in receiving data: {e}")
+            logger.error(f"Unexpected error in receiving data: {e}")
             return None
 
 
@@ -196,7 +196,7 @@ class ImageStorage:
             # print("sd_image.shape ==",sd_image.shape)
 
             if hdhe_image is None or hdhe_image is None:
-                print("Failed to decode images.")
+                logger.error("Failed to decode images.")
                 return None, None
 
             # Save the images
@@ -213,7 +213,7 @@ class ImageStorage:
             # print(f"Images saved as {hd_image_path} and {sd_image_path}.")
             return hdhe_image_path, hdle_image_path
         except Exception as e:
-            print(f"Error saving images: {e}")
+            logger.error(f"Error saving images: {e}")
             return None, None
 
 # RabbitMQ setup
@@ -225,7 +225,7 @@ def connect_rabbitmq():
         channel.queue_declare(queue='bahrain.detection.queue', durable = True)
         return channel
     except Exception as e:
-        print(f"RabbitMQ connection failed: {e}")
+        logger.error(f"RabbitMQ connection failed: {e}")
         return None
 
 # Function to encode video in base64
@@ -313,13 +313,28 @@ def send_payload_to_rabbitmq(channel, payload): #, hdhe_image_path, hdle_image_p
                               )
         return True
     except json.JSONDecodeError as e:
-        print(f"Error decoding JSON payload: {e}")
+        logger.error(f"Error decoding JSON payload: {e}")
         return False
     except Exception as e:
-        print(f"Failed to send payload to RabbitMQ: {e}")
+        logger.error(f"Failed to send payload to RabbitMQ: {e}")
         return False
 
 def main():
+
+    # Configure the logger
+    logging.basicConfig(
+        level=logging.DEBUG,  # Set the logging level
+        format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
+        handlers=[
+            logging.FileHandler('./logs/video_payloads.log'),  # Log messages to a file
+            logging.StreamHandler()            # Also log to console
+        ]
+    )
+
+    # Create a logger object
+    logger = logging.getLogger(__name__)
+    logging.getLogger("pika").setLevel(logging.WARNING)
+    logging.getLogger("sqlite3").setLevel(logging.WARNING)
 
     first_run = 0
 
@@ -368,22 +383,21 @@ def main():
             # print(images_json)
             # print("check out point1")
             if images_json is not None:
-                print("#[storage manager] got image json")
+                logger.info("#[storage manager] got image json")
 
                 try:
                     index_pos = images_json["index"]
                     # print(index_pos)
 
                     if 0 not in index_pos or 1 not in index_pos or len(images_json["index"]) < 2:
-                        print("#[storage manager]   lost frames ")
+                        logger.warning("#[storage manager]   lost frames ")
                         continue
                     hdhe_image_base64 = images_json["images"][0]
                     hdle_image_base64 = images_json["images"][2]
 
-
                     payload = images_json["metadata"]
 
-                    print("#[storage manager] payload => ",payload, len(payload), images_json.keys())
+                    logger.info("#[storage manager] payload => ",payload, len(payload), images_json.keys())
                     
 
                     if payload != 'null':
@@ -395,7 +409,7 @@ def main():
                         # Save images
                         hdhe_image_path, hdle_image_path = image_storage.save_images(hdhe_image_base64,hdle_image_base64)
                         if not hdhe_image_path or not hdle_image_path:
-                            print("#[storage manager] Image saving failed.")
+                            logger.error("#[storage manager] Image saving failed.")
                             continue
                         record_list = []
 
@@ -432,7 +446,7 @@ def main():
                         )
 
                         if payload['speed'] != 'null':
-                            print('#[storage manager] - speed payload')
+                            logger.info('#[storage manager] - speed payload')
                             #SPEED
                             record2 = {
                                 "device_id": 2,
@@ -452,7 +466,7 @@ def main():
                             }
 
                         elif label in violation_list.values():
-                            print('#[storage manager] - event payload')
+                            logger.info('#[storage manager] - event payload')
                             #event
                             record2 = {
                                 "device_id": 2,
@@ -472,7 +486,7 @@ def main():
                             }
 
                         elif label in vehicle_list:
-                            print('#[storage manager] - ANPR payload')
+                            logger.info('#[storage manager] - ANPR payload')
                             #ALL ANPR
                             record2 = {
                                 "device_id": 2,
@@ -527,16 +541,16 @@ def main():
                                 status = 'HISTORY'
                             
                             db_manager.update_payload_status(last_violation_id, status)
-                            print("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
+                            logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
                     else:
                         continue
                     
                 except KeyError as e:
-                    print("#[storage manager]",f"Key error: {e}. Ensure correct data format.")
-                    print("#[storage manager]",traceback.format_exc())
+                    logger.error("#[storage manager]",f"Key error: {e}. Ensure correct data format.")
+                    logger.error("#[storage manager]",traceback.format_exc())
                 except Exception as e:
-                    print("#[storage manager]",f"Unexpected error processing images: {e}")
-                    print("#[storage manager]",traceback.format_exc())
+                    logger.error("#[storage manager]",f"Unexpected error processing images: {e}")
+                    logger.error("#[storage manager]",traceback.format_exc())
 
             else:
                 # No data received, continue loop
@@ -544,11 +558,11 @@ def main():
         db_manager.close()
 
     except KeyboardInterrupt:
-        print("#[storage manager]","Process interrupted by user.")
+        logger.error("#[storage manager]","Process interrupted by user.")
     except zmq.ZMQError as e:
-        print("#[storage manager]",f"ZMQ error: {e}")
+        logger.error("#[storage manager]",f"ZMQ error: {e}")
     except Exception as e:
-        print("#[storage manager]",f"Unexpected error in main loop: {e}")
+        logger.error("#[storage manager]",f"Unexpected error in main loop: {e}")
 
 if __name__ == "__main__":
     main()

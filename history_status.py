@@ -1,10 +1,10 @@
-
 import sqlite3
 import time
 import pika
 import sys
 import json
 import base64
+import logging
 
 # RabbitMQ setup
 def connect_rabbitmq():
@@ -15,17 +15,17 @@ def connect_rabbitmq():
         channel.queue_declare(queue='bahrain.detection.queue', durable=True)
         return channel
     except Exception as e:
-        print(f"RabbitMQ connection failed: {e}")
+        logger.error(f"RabbitMQ connection failed: {e}")
         return None
 
 # Function to send message to RabbitMQ
 def send_to_rabbitmq(channel, message):
     try:
         channel.basic_publish(exchange='vms.main.exchange', routing_key='bahrain.detection.queue.key', body=message)
-        print(f"Sent: < ========= ")
+        logger.info(f"Sent: < ========= ")
         return True
     except Exception as e:
-        print(f"Failed to send message to RabbitMQ: {e}")
+        logger.error(f"Failed to send message to RabbitMQ: {e}")
         return False
 
 # Function to update status in the SQLite database
@@ -34,14 +34,27 @@ def update_status(conn, record_id, new_status):
         cursor = conn.cursor()
         cursor.execute("UPDATE videos SET status = ? WHERE id = ?", (new_status, record_id))
         conn.commit()
-        print(f"Updated record {record_id} to status {new_status}")
+        logger.info(f"Updated record {record_id} to status {new_status}")
     except Exception as e:
-        print(f"Failed to update status in SQLite: {e}")
+        logger.error(f"Failed to update status in SQLite: {e}")
+
+# # Function to encode video in base64
+# def encode_video_to_bytes(video_path):
+#     with open(video_path, 'rb') as video_file:
+#         return base64.b64encode(video_file.read()).decode('utf-8')
 
 # Function to encode video in base64
 def encode_video_to_bytes(video_path):
-    with open(video_path, 'rb') as video_file:
-        return base64.b64encode(video_file.read()).decode('utf-8')
+    try:
+        with open(video_path, 'rb') as video_file:
+            logging.info(f"Successfully opened {video_path}")
+            return base64.b64encode(video_file.read()).decode('utf-8')
+    except FileNotFoundError:
+        logging.error(f"File not found: {video_path}")
+        return None  # Or raise an exception, or handle as needed
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        return None  # Or handle the exception as needed
 
 # Function to check the SQLite database for records with status 'HISTORY' in the payloads table
 def check_and_send_payloads(conn, rabbitmq_channel):
@@ -97,7 +110,7 @@ def monitor_db():
     try:
         conn = sqlite3.connect('videologs.db')
     except sqlite3.Error as e:
-        print(f"SQLite connection failed: {e}")
+        logger.error(f"SQLite connection failed: {e}")
         sys.exit(1)
 
     rabbitmq_channel = connect_rabbitmq()
@@ -108,7 +121,7 @@ def monitor_db():
             check_and_send_videos(conn, rabbitmq_channel)  # Check videos table as well
             time.sleep(5)  # Check every 5 seconds
     except KeyboardInterrupt:
-        print("Program terminated.")
+        logger.error("Program terminated.")
     finally:
         if conn:
             conn.close()
@@ -116,4 +129,21 @@ def monitor_db():
             rabbitmq_channel.connection.close()
 
 if __name__ == "__main__":
+
+     # Configure the logger
+    logging.basicConfig(
+        level=logging.DEBUG,  # Set the logging level
+        format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
+        handlers=[
+            logging.FileHandler('./logs/history_status.log'),  # Log messages to a file
+            logging.StreamHandler()
+        ]
+    )
+
+    # Create a logger object
+    logger = logging.getLogger(__name__)
+    logging.getLogger("pika").setLevel(logging.WARNING)
+    logging.getLogger("sqlite3").setLevel(logging.WARNING)
+    logging.getLogger("watchdog").setLevel(logging.WARNING)
+
     monitor_db()
