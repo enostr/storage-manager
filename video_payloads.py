@@ -8,7 +8,6 @@ import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import pika
-import logging
 
 class DatabaseManager:
     """Handles database creation, saving, and updating."""
@@ -45,7 +44,7 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?)
             ''', records)
             conn.commit()
-            logger.info('Updated Video DB')
+            print('Updated Video DB')
 
     def update_video_status(self, v_id, status):
         """Update the status of a video in the database."""
@@ -70,7 +69,7 @@ def connect_rabbitmq():
         channel.queue_declare(queue='bahrain.detection.queue', durable=True)
         return channel
     except Exception as e:
-        logger.error(f"RabbitMQ connection failed: {e}")
+        print(f"RabbitMQ connection failed: {e}")
         return None
 
 def encode_video_to_bytes(video_path):
@@ -94,10 +93,10 @@ def send_payload_to_rabbitmq(channel, payload):
                               properties=message_properties)
         return True
     except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON payload: {e}")
+        print(f"Error decoding JSON payload: {e}")
         return False
     except Exception as e:
-        logger.error(f"Failed to send payload to RabbitMQ: {e}")
+        print(f"Failed to send payload to RabbitMQ: {e}")
         return False
 
 def is_mp4_corrupt(file_path):
@@ -108,11 +107,11 @@ def is_mp4_corrupt(file_path):
             stderr=subprocess.PIPE
         )
         if result.returncode != 0 or result.stderr:
-            logger.debug(result.stderr.decode('utf-8'))
+            print(result.stderr.decode('utf-8'))  # Print error for debugging
             return True  # The file is corrupt
         return False  # The file is valid
     except Exception as e:
-        logger.error(f"Error checking file: {e}")
+        print(f"Error checking file: {e}")
         return True  # Assume the file is corrupt if an error occurs
 
 class MP4Handler(FileSystemEventHandler):
@@ -123,15 +122,15 @@ class MP4Handler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith('.mp4'):
             file_name = os.path.basename(event.src_path)
-            logger.info(f"New MP4 file detected: {file_name}")
+            print(f"New MP4 file detected: {file_name}")
 
             time.sleep(1)  # Adjust this delay if necessary
 
             if is_mp4_corrupt(event.src_path):
-                logger.info(f"{file_name} is corrupt.")
+                print(f"{file_name} is corrupt.")
                 os.remove(event.src_path)
             else:
-                logger.info(f"{file_name} is valid.")
+                print(f"{file_name} is valid.")
                 self.vid_payload(event.src_path, file_name)
 
     def vid_payload(self, video_path, file_name):
@@ -142,7 +141,7 @@ class MP4Handler(FileSystemEventHandler):
 
             # Check if the filename has the expected number of parts
             if len(parts) < 2:
-                logger.info(f"Filename format not as expected: {file_name}")
+                print(f"Filename format not as expected: {file_name}")
                 return
 
             # Split the second part to extract image_id and source_id
@@ -163,50 +162,32 @@ class MP4Handler(FileSystemEventHandler):
 
             if send_payload_to_rabbitmq(self.channel, record2):
                 status = 'STORAGE'
-                logger.info(f"Payload sent for video: {file_name}")
+                print(f"Payload sent for video: {file_name}")
             else:
                 status = 'HISTORY'
-                logger.error(f"Failed to send payload for video: {file_name}")
+                print(f"Failed to send payload for video: {file_name}")
                 
             db_manager.update_video_status(image_id, status)
-            logger.info('DB STATUS UPDATED')
+            print('DB STATUS UPDATED')
 
         except Exception as e:
-            logger.error(f"Error processing video {file_name}: {e}")
+            print(f"Error processing video {file_name}: {e}")
         
         db_manager.close()
 
 
 if __name__ == "__main__":
-
-    # Configure the logger
-    logging.basicConfig(
-        level=logging.DEBUG,  # Set the logging level
-        format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-        handlers=[
-            logging.FileHandler('./logs/video_payloads.log'),  # Log messages to a file
-            logging.StreamHandler()            # Also log to console
-        ]
-    )
-
-    # Create a logger object
-    logger = logging.getLogger(__name__)
-    logging.getLogger("pika").setLevel(logging.WARNING)
-    logging.getLogger("sqlite3").setLevel(logging.WARNING)
-    logging.getLogger("watchdog").setLevel(logging.WARNING)
-
     db_manager = DatabaseManager('./videologs.db')  # Set the actual path to your database
     channel = connect_rabbitmq()
     
     current_date = datetime.now().strftime("%d-%m-%Y")
-    path = f"../P3/violation_records/{current_date}"
-    
+    path = f"/home/mtx003/BAHRAIN_RELEASE_V2/P3/violation_records/{current_date}/videos"
     
     while not os.path.exists(path):
-        logger.info(f"Waiting for directory {path} to be created...")
+        print(f"Waiting for directory {path} to be created...")
         time.sleep(5)
     
-    logger.info(f"Directory {path} exists. Starting observer.")
+    print(f"Directory {path} exists. Starting observer.")
     event_handler = MP4Handler(db_manager, channel)
     observer = Observer()
     observer.schedule(event_handler, path, recursive=False)

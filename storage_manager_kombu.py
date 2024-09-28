@@ -1,17 +1,15 @@
-
-import os
-#from io import ByetesIO
+from kombu import Connection, Queue, Producer, Exchange
 import json
+import logging
+import time
+import zmq
+import sqlite3
+import base64
+import os
 from datetime import datetime
 import cv2
 import numpy as np
-import zmq
-import sqlite3
-import pika
-import time
-import base64
 import traceback
-import logging
 
 class DatabaseManager:
     """Handles database creation, saving, and updating."""
@@ -217,27 +215,34 @@ class ImageStorage:
             logger.error(f"Error saving images: {e}")
             return None, None
 
-# RabbitMQ setup
-def connect_rabbitmq():
-    try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters(
-            '192.168.134.117', 45701, '/', pika.PlainCredentials('user', 'zSfC5GT2NWZdLxeR'))) #, frame_max=3145728)) #'202.88.232.230'
-        channel = connection.channel()
-        channel.queue_declare(queue='bahrain.detection.ai.testing', durable = True)
-        return channel
-    except Exception as e:
-        logger.error(f"RabbitMQ connection failed: {e}")
-        return None
-        
-# Function to encode video in base64
+#KOMBU connection here
+
+# Define the exchange and queue
+exchange = Exchange('vms.main.exchange', type='direct')
+queue = Queue('bahrain.detection.ai.testing', exchange, routing_key='bahrain.detection.queue.key', durable=True)
+
+# Connection parameters
+connection_params = {
+    'hostname': '192.168.134.117',
+    'port': 45701,
+    'userid': 'user',
+    'password': 'zSfC5GT2NWZdLxeR',
+    'virtual_host': '/',
+    'heartbeat': 60,  # Set heartbeat to 60 seconds
+}
+
+# Function to encode image in base64
 def encode_image_to_bytes(image_path):
-    with open(image_path, 'rb') as image_file:
+    try:
+        logger.debug(f"Encoding image at path: {image_path}")
+        with open(image_path, 'rb') as image_file:
+            encoded_bytes = base64.b64encode(image_file.read()).decode('utf-8')
+            logger.info(f"Image encoded successfully: {image_path}")
+            return encoded_bytes
+    except Exception as e:
+        logger.error(f"Failed to encode image: {image_path}, error: {e}")
+        return None
 
-        #data = image_file.read()
-        #im = Image.open(BytesIO(data))
-
-        return base64.b64encode(image_file.read()).decode('utf-8')
-        
 def scale_bounding_box(bbox, original_size=(1920, 1080), target_size=(3840, 2160)):
     logger.info(" SCALING BOUNDING BOX %s",bbox)
     """Scale bbox"""
@@ -257,65 +262,6 @@ def scale_bounding_box(bbox, original_size=(1920, 1080), target_size=(3840, 2160
 
     return scaled_bbox
 
-def send_payload_to_rabbitmq(channel, payload): #, hdhe_image_path, hdle_image_path):
-    """
-    Send payload to RabbitMQ with images from their file paths included in the message.
-
-    Args:
-        channel: RabbitMQ channel.
-        payload: Payload data to send (in JSON format or dictionary).
-        hd_image_path: Path to the saved HD image.
-        sd_image_path: Path to the saved SD image.
-    
-    Returns:
-        bool: True if successful, False otherwise.
-    """
-    try:
-        # Debug print to check payload content
-        # print(f"Payload before processing: {payload}")
-
-
-        # # Read the HD and SD images from their respective paths
-        # with open(hdhe_image_path, 'rb') as hdhe_file:
-        #     hdhe_image_bytes = hdhe_file.read()
-
-        # with open(hdle_image_path, 'rb') as hdle_file:
-        #     hdle_image_bytes = hdle_file.read()
-
-        # # print(payload)
-        # # print(type(payload))
-
-        # # # Base64 encode the images to include in the payload
-        # payload + ", "
-        # payload = payload + 'hdhe_image' + "'" + base64.b64encode(hdhe_image_bytes).decode('utf-8') + "' , " 
-        # payload = payload + 'hdle_image' + "'" + base64.b64encode(hdle_image_bytes).decode('utf-8') + "' )" 
-
-        message_properties = pika.BasicProperties(
-                    headers={"__TypeId__":"in.trois.bahrain.poc.request.payload.BahrainDetectionsRequestPayload"},
-                    content_type ='application/octet-stream',
-                    delivery_mode = 2
-                    )
-        # # Convert payload back to JSON string for sending
-        payload_str = json.dumps(payload)
-        # payload_str = payload
-
-        # Debug print to check payload string before sending
-        # print(f"Payload string to send: {payload_str}")
-
-        # Send payload with images to RabbitMQ
-        channel.basic_publish(exchange='vms.main.exchange',
-                              routing_key='bahrain.detection.queue.key',
-                              body=payload_str,
-                              properties = message_properties
-                              )
-        return True
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON payload: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Failed to send payload to RabbitMQ: {e}")
-        return False
-
 def get_device_id(device):
     if device == 'FR':
         device_id = 1
@@ -327,11 +273,42 @@ def get_device_id(device):
         device_id = 3
         return device_id
 
+def publish_message(payload):
+    try:
+        # Convert payload to JSON string
+        payload_str = json.dumps(payload)
+        logger.debug(f"Payload string to send: {payload_str}")
+
+        # Create the connection URL with heartbeat
+        connection_url = f"amqp://{connection_params['userid']}:{connection_params['password']}@{connection_params['hostname']}:{connection_params['port']}/{connection_params['virtual_host']}?heartbeat={connection_params['heartbeat']}"
+        
+        # Establish a connection and publish the message
+        with Connection(connection_url) as conn:
+            logger.info("Connection established successfully.")
+            # Create a producer
+            producer = Producer(conn)
+
+            # Publish the message with properties
+            producer.publish(
+                payload_str,
+                exchange=exchange,
+                routing_key='bahrain.detection.queue.key',
+                headers={"__TypeId__": "in.trois.bahrain.poc.request.payload.BahrainDetectionsRequestPayload"},
+                content_type='application/json',
+                delivery_mode=2  # Make the message persistent
+            )
+            logger.info("Message published successfully.")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to publish message: {e}")
+        return False
+
 def main():
 
     device = 'RLVDS'
     device_id = get_device_id(device)
-    
+
     logger.info("----STARTING---STORAGE---MANAGER----")
 
     vehicle_list = ["CAR", "TRUCK", "BUS", "AUTO", "MINI_TRUCK", "MINI_BUS", "TWO_WHEELER" ]
@@ -364,32 +341,28 @@ def main():
         25: "ZIGZAG"
     }
 
-    """Main function to continuously receive image data and save them to disk."""
     try:
         data_receiver = ReceiveData("ipc:///tmp/MTX_out")
         image_storage = ImageStorage("/home/mtx003/data")
         # SQLite database manager
         db_manager = DatabaseManager('/home/mtx003/data/videologs.db')
 
-        channel =  connect_rabbitmq()
+        # channel =  connect_rabbitmq()
 
         while True:
             images_json = data_receiver.get_data()
-            
             # logger.info(" === > " + str(images_json))
-          
-            # print(images_json)
-            # print("check out point1")
+
             if images_json is not None:
                 logger.info("#[storage manager] got image json")
-
+                
                 try:
                     index_pos = images_json["index"]
                     # print(index_pos)
 
                     # if 0 not in index_pos or 1 not in index_pos or len(images_json["index"]) < 2:
                     if 0 not in index_pos or 1 not in index_pos or len(images_json["index"]) < 2:
-                        logger.warning("#[storage manager]   lost frames ")
+                        logger.warning("#[storage manager] lost frames ")
                         continue
                     hdhe_image_base64 = images_json["images"][0]
                     hdle_image_base64 = images_json["images"][2]
@@ -401,10 +374,6 @@ def main():
 
                     if payload != 'null':
 
-                        #speed violation
-                        # {"output":[{"ImageId":"image361",
-                        # "result":{"coords":"null","direction":"null","label":"null","lane":"null","objectid":"28_0","speed":"27","stoped_duration":"null"},"source_id":"mtx"}]}                        
-                            
                         # Save images
                         hdhe_image_path, hdle_image_path = image_storage.save_images(hdhe_image_base64,hdle_image_base64)
                         if not hdhe_image_path or not hdle_image_path:
@@ -423,6 +392,7 @@ def main():
                             match_id = [id for id, violation in violation_list.items() if violation == label]
                         else:
                             match_id = [1]
+
                         record = (
                             f'{images_json["ImageId"]}',
                             f'{match_id[0]}',
@@ -470,8 +440,8 @@ def main():
                             logger.info("IMAGE ID", images_json["ImageId"], "OBJECT ID", payload["objectid"].split("_")[0])
                             logger.info("VIOLATION", label)
                             logger.info("TIMESTAMP", time.time())
-                            # logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
-
+                            logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                        
                         elif label in violation_list.values():
                             logger.info('#[storage manager] - event payload')
                             #event
@@ -499,7 +469,7 @@ def main():
                             logger.info("VIOLATION: %s", label)
                             logger.info("TIMESTAMP: %s", time.time())
                             # logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
-
+                        
                         elif label in vehicle_list:
                             logger.info('#[storage manager] - ANPR payload')
                             #ALL ANPR
@@ -526,55 +496,37 @@ def main():
                             logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
                             logger.info("VIOLATION: %s", label)
                             logger.info("TIMESTAMP: %s", time.time())
-                            # logger.info("IMAGE SIZE: %s KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                            logger.info("IMAGE SIZE: %s KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
 
-                        record_list.append(record)
                         # Insert violation records into the database
+                        record_list.append(record)
                         last_violation_id = db_manager.insert_violations(record_list)
-
+                        
                         # Insert payloads
-                        payload_record_list = [(last_violation_id, 'LIVE', json.loads(json.dumps(record2)))]#str(record)) for record in record2]
+                        # payload_record_list = [(last_violation_id, 'LIVE', json.loads(json.dumps(record2)))]#str(record)) for record in record2]
 
                         payload_record_for_db = [(last_violation_id, 'LIVE', json.dumps(record2))]
                         db_manager.insert_payloads(payload_record_for_db)
-                        #print("#[storage manager]== jsondumps ", json.dumps(record2))
-                        #print("#[storage manager]== record ", record2)
-
-#                        with open(f'{images_json["ImageId"]}_file.json', 'w') as json_file:
-#                           json.dump(record2, json_file)
 
                         # Specify the keys to print
                         keys_to_print = ["device_id", "frame_no", "stream_id", "object_id", "speed", "vehicle_class", "box_coord", "detected_at", "detection_confidence", "event_id", "tracker_confidence" ]
 
-                        # Print only the specified keys
-                        #print("----------"*80)
-                        #for key in keys_to_print:
-                        #    if key in record2:
-                        #        print(f"{key}: {record2[key]}")
-
-                        #print("----------"*80)
-
-                        # Attempt to send to RabbitMQ and update status
-                        for record in payload_record_list:
-                            payload_str = record[2]  # Extracting the 'data' field
-                            if send_payload_to_rabbitmq(channel, payload_str): #, hdhe_image_path, hdle_image_path):
-                                status = 'STORAGE'
-                            else:
-                                status = 'HISTORY'
-                            
-                            db_manager.update_payload_status(last_violation_id, status)
-                            logger.info("#[storage manager] Record updated with status %s ---------------------------------------------------------------------------", status)
-                            # logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
+                        # # Attempt to send to RabbitMQ and update status
+                        # for record in payload_record_list:
+                        #     payload_str = record[2]  # Extracting the 'data' field
+                        #     if send_payload_to_rabbitmq(channel, payload_str): #, hdhe_image_path, hdle_image_path):
+                        #         status = 'STORAGE'
+                        #     else:
+                        #         status = 'HISTORY'
+                        
+                        publish_message(payload)
+                        
+                        # db_manager.update_payload_status(last_violation_id, status)
+                        # logger.info("#[storage manager] Record updated with status %s ---------------------------------------------------------------------------", status)
+                        # logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
                     else:
                         continue
-                    
-                # except KeyError as e:
-                #     logger.error("#[storage manager]",f"Key error: {e}. Ensure correct data format.")
-                #     logger.error("#[storage manager]",traceback.format_exc())
-                # except Exception as e:
-                #     logger.error("#[storage manager]",f"Unexpected error processing images: {e}")
-                #     logger.error("#[storage manager]",traceback.format_exc())
-
+                        
                 # Logging with traceback on KeyError
                 except KeyError as e:
                     logger.error("#[storage manager] Key error: %s. Ensure correct data format.", e)
@@ -604,7 +556,7 @@ if __name__ == "__main__":
         level=logging.DEBUG,  # Set the logging level
         format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
         handlers=[
-            logging.FileHandler('./logs/storage_manager.log'),  # Log messages to a file
+            logging.FileHandler('./logs/storage_manager_kombu.log'),  # Log messages to a file
             logging.StreamHandler() # Also log to console
         ]
     )
