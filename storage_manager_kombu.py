@@ -252,7 +252,7 @@ def scale_bounding_box(bbox, original_size=(1920, 1080), target_size=(3840, 2160
     scale_x = target_width / original_width
     scale_y = target_height / original_height
 
-    x_min, y_min, x_max, y_max = bbox
+    x_min, y_min, x_max, y_max = map(int, bbox)
     scaled_bbox = (
         int(x_min * scale_x),
         int(y_min * scale_y),
@@ -383,7 +383,10 @@ def main():
 
                         # for i in payload:
                         coords = payload['coords']
-                        coords_scaled = scale_bounding_box(coords)
+                        if coords != "null":
+                            coords_scaled = scale_bounding_box(coords)
+                        else:
+                            logger.error("#[storage manager] coords null.")
                         label = payload['label']
 
                         if label in vehicle_list:
@@ -511,19 +514,13 @@ def main():
                         # Specify the keys to print
                         keys_to_print = ["device_id", "frame_no", "stream_id", "object_id", "speed", "vehicle_class", "box_coord", "detected_at", "detection_confidence", "event_id", "tracker_confidence" ]
 
-                        # # Attempt to send to RabbitMQ and update status
-                        # for record in payload_record_list:
-                        #     payload_str = record[2]  # Extracting the 'data' field
-                        #     if send_payload_to_rabbitmq(channel, payload_str): #, hdhe_image_path, hdle_image_path):
-                        #         status = 'STORAGE'
-                        #     else:
-                        #         status = 'HISTORY'
+                        if publish_message(record2):  # , hdhe_image_path, hdle_image_path):
+                            status = 'STORAGE'
+                        else:
+                            status = 'HISTORY'
                         
-                        publish_message(payload)
-                        
-                        # db_manager.update_payload_status(last_violation_id, status)
-                        # logger.info("#[storage manager] Record updated with status %s ---------------------------------------------------------------------------", status)
-                        # logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
+                        db_manager.update_payload_status(last_violation_id, status)
+                        logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
                     else:
                         continue
                         
