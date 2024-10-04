@@ -227,6 +227,7 @@ def permanent_storage_used(mount_point):
     if folder_size is not None and total_space is not None:
         percentage_used = (folder_size / total_space) * 100
         # print(f"Data usage in {mount_point}: {round(percentage_used, 2)}%")
+        return round(percentage_used, 2)
     else:
         print(f"Failed to calculate data usage for {mount_point}")
 
