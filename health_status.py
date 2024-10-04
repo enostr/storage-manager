@@ -2,20 +2,32 @@ import os
 import pika
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import time
+from datetime import datetime
 import sqlite3
 # from datetime import datetime
 from kombu import Connection, Queue, Producer, Exchange
 
 
+# Create a rotating file handler
+handler = RotatingFileHandler(
+    './logs/health_status_kombu.log', 
+    mode='a',  # Append mode
+    maxBytes=3 * 1024 * 1024,  # 3 MB size limit
+    backupCount=10  # Optional: number of backup logs to keep
+)
+
 # Configure the logger
 logging.basicConfig(
     level=logging.DEBUG,  # Set the logging level
     format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-    handlers=[
-        logging.FileHandler('./logs/health_status_kombu.log'),  # Log messages to a file
-        logging.StreamHandler() # Also log to console
-    ]
+    handlers=[handler]
+    
+    # handlers=[
+    #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
+    #     logging.StreamHandler()
+    # ]
 )
 
 # Create a logger object
@@ -27,18 +39,18 @@ logging.getLogger("sqlite3").setLevel(logging.WARNING)
 
 # Define the exchange and queue
 exchange = Exchange('vms.main.exchange', type='direct')
-queue = Queue('bahrain.device.monitoring.queue', exchange, routing_key='bahrain.device.monitoring.queue.key', durable=True)
+# queue = Queue('bahrain.device.monitoring.queue', exchange, routing_key='bahrain.device.monitoring.queue.key', durable=True)
+queue = Queue('bahrain.detection.ai.testing', exchange, routing_key='bahrain.detection.queue.key', durable=True)
 
 # Connection parameters
 connection_params = {
-    'hostname': '202.88.232.230', #'192.168.134.117',
+    'hostname': '192.168.134.117',#'202.88.232.230', #
     'port': 45701,
     'userid': 'user',
     'password': 'zSfC5GT2NWZdLxeR',
     'virtual_host': '/',
     'heartbeat': 60,  # Set heartbeat to 60 seconds
 }
-
 
 def publish_message(payload):
     try:
@@ -59,7 +71,7 @@ def publish_message(payload):
             producer.publish(
                 payload_str,
                 exchange=exchange,
-                routing_key='bahrain.device.monitoring.queue.key',
+                routing_key= 'bahrain.detection.queue.key',#'bahrain.device.monitoring.queue.key',
                 headers={"__TypeId__": "in.trois.bahrain.poc.dto.fr.BahrainDeviceMonitoringDto"},
                 content_type='application/json',
                 delivery_mode=2  # Make the message persistent
@@ -194,7 +206,10 @@ def main():
 
     # channel =  connect_rabbitmq()
 
-    db_path = '/home/mtx003/data/videologs.db'
+    today_date = datetime.now().strftime("%d-%m-%y")
+    db_name = f'./database_records/videologs_{today_date}.db'
+
+    # db_path = '/home/mtx003/data/videologs.db'
 
     while True:
 
@@ -209,7 +224,7 @@ def main():
             "battery_voltage": 10.1,  # Optional, if applicable
             "IR_status": check_ir_status(),
             "permanent_storage_used": permanent_storage_used(),  # Percentage (0-100)
-            "offline_data_to_sync": get_offline_data_percentage(db_path),  # Percentage (0-100)
+            "offline_data_to_sync": get_offline_data_percentage(db_name),  # Percentage (0-100)
             "health_time" : int(time.time()), #1701676735,
         }
         
