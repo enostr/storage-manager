@@ -52,6 +52,7 @@ def publish_message(payload):
                 delivery_mode=2  # Make the message persistent
             )
             logger.info("Message published successfully.")
+            time.sleep(3)
         return True
 
     except Exception as e:
@@ -97,12 +98,14 @@ def check_and_send_payloads(conn):
     logger.info("===== METADATA PAYLOADS =====")
 
     cursor = conn.cursor()
-    cursor.execute("SELECT id, status FROM payloads WHERE status = 'HISTORY'")
+    cursor.execute("SELECT id, status, data FROM payloads WHERE status = 'HISTORY'")
     records = cursor.fetchall()
-
+    # logger.info(f'{records}')
+    
     for record in records:
         record_id = record[0]
-        payload = record[1]
+        payload = record
+        data = record[2]
 
         # if rabbitmq_channel and send_to_rabbitmq(rabbitmq_channel, str(payload)):
         if publish_message(payload):
@@ -150,9 +153,15 @@ def check_and_send_videos(conn):
 
 # Main function to monitor the database at regular intervals
 def monitor_db():
+
+    today_date = datetime.now().strftime("%d-%m-%y")
+    # db_name = f'./database_records/videologs_{today_date}.db'
+    db_name = f'/home/mtx003/data/04-10-2024/videologs_04-10-24.db'
+
+
     try:
         logger.info("Trying to connect to db")
-        conn = sqlite3.connect('/home/mtx003/data/videologs.db')
+        conn = sqlite3.connect(db_name)
     except sqlite3.Error as e:
         logger.error(f"SQLite connection failed: {e}")
         sys.exit(1)
