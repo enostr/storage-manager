@@ -121,11 +121,13 @@ def check_and_send_videos(conn):
 
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, videopath FROM videos WHERE status = 'HISTORY'")
+        cursor.execute("SELECT id, videopath FROM videos WHERE status = 'STORAGE'")
         records = cursor.fetchall()
     except sqlite3.OperationalError as e:
         logger.error("Database error: %s", e)
         return  # Exit the function if the table does not exist or an error occurs
+    
+    print(records)
 
     for record in records:
         record_id = record[0]
@@ -148,6 +150,7 @@ def check_and_send_videos(conn):
         # if rabbitmq_channel and send_to_rabbitmq(rabbitmq_channel, payload_str):
         if publish_message(video_payload):
             update_status(conn, record_id, 'STORAGE')
+            logger.info(f"Video Payload Sent {record_id} from {video_path}")
         else:
             time.sleep(5)  # Wait for 5 seconds before trying again
 
@@ -155,8 +158,7 @@ def check_and_send_videos(conn):
 def monitor_db():
 
     today_date = datetime.now().strftime("%d-%m-%y")
-    # db_name = f'./database_records/videologs_{today_date}.db'
-    db_name = f'/home/mtx003/data/04-10-2024/videologs_04-10-24.db'
+    db_name = f'./database_records/videologs_{today_date}.db'
 
 
     try:
