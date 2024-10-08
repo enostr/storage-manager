@@ -10,6 +10,7 @@ from watchdog.events import FileSystemEventHandler
 from kombu import Connection, Queue, Producer, Exchange
 import pika
 import logging
+from logging.handlers import RotatingFileHandler
 
 class DatabaseManager:
     """Handles database creation, saving, and updating."""
@@ -31,6 +32,7 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS videos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     image_id TEXT,
+                    object_id TEXT,
                     date TIMESTAMP,
                     status TEXT,
                     videopath TEXT
@@ -42,11 +44,11 @@ class DatabaseManager:
         with self.create_connection() as conn:
             cur = conn.cursor()
             cur.executemany('''
-                INSERT INTO videos (image_id, date, status, videopath) 
-                VALUES (?, ?, ?, ?)
+                INSERT INTO videos (image_id, object_id, date, status, videopath) 
+                VALUES (?, ?, ?, ?, ?)
             ''', records)
             conn.commit()
-            print('Updated Video DB')
+            logger.info('Updated Video DB')
 
     def update_video_status(self, v_id, status):
         """Update the status of a video in the database."""
@@ -71,7 +73,7 @@ class DatabaseManager:
 #         channel.queue_declare(queue='bahrain.detection.queue', durable=True)
 #         return channel
 #     except Exception as e:
-#         print(f"RabbitMQ connection failed: {e}")
+#         logger.info(f"RabbitMQ connection failed: {e}")
 #         return None
 
 def encode_video_to_bytes(video_path):
@@ -95,17 +97,16 @@ def encode_video_to_bytes(video_path):
 #                               properties=message_properties)
 #         return True
 #     except json.JSONDecodeError as e:
-#         print(f"Error decoding JSON payload: {e}")
+#         logger.info(f"Error decoding JSON payload: {e}")
 #         return False
 #     except Exception as e:
-#         print(f"Failed to send payload to RabbitMQ: {e}")
+#         logger.info(f"Failed to send payload to RabbitMQ: {e}")
 #         return False
 
 def publish_message(payload):
     try:
         # Convert payload to JSON string
         payload_str = json.dumps(payload)
-        logger.debug(f"Payload string to send: {payload_str}")
 
         # Create the connection URL with heartbeat
         connection_url = f"amqp://{connection_params['userid']}:{connection_params['password']}@{connection_params['hostname']}:{connection_params['port']}/{connection_params['virtual_host']}?heartbeat={connection_params['heartbeat']}"
@@ -132,22 +133,6 @@ def publish_message(payload):
         logger.error(f"Failed to publish message: {e}")
         return False
 
-
-def is_mp4_corrupt(file_path):
-    try:
-        result = subprocess.run(
-            ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        if result.returncode != 0 or result.stderr:
-            logger.debug(f"{result.stderr.decode('utf-8')}")  # Print error for debugging
-            return True  # The file is corrupt
-        return False  # The file is valid
-    except Exception as e:
-        logger.error(f"Error checking file: {e}")
-        return True  # Assume the file is corrupt if an error occurs
-
 class MP4Handler(FileSystemEventHandler):
     def __init__(self, db_manager):
         self.db_manager = db_manager
@@ -160,12 +145,7 @@ class MP4Handler(FileSystemEventHandler):
 
             time.sleep(1)  # Adjust this delay if necessary
 
-            if is_mp4_corrupt(event.src_path):
-                logger.error(f"{file_name} is corrupt.")
-                os.remove(event.src_path)
-            else:
-                logger.info(f"{file_name} is valid.")
-                self.vid_payload(event.src_path, file_name)
+            self.vid_payload(event.src_path, file_name)
 
     def vid_payload(self, video_path, file_name):
         try:
@@ -179,19 +159,21 @@ class MP4Handler(FileSystemEventHandler):
                 return
 
             # Split the second part to extract image_id and source_id
-            image_id = parts[1].split('_')[0]  # Get the first part as image_id
-            source_id = parts[1].split('_')[1]  # Get the second part as source_i
+            image_id = parts[1].split('_')[0]  # frame no
+            source_id = parts[1].split('_')[1]  # mtx or ptz
+            object_id = parts[1].split('_')[2]  # object id
 
             # Video Payload
             record2 = {
                 "device_id": 1,
                 "frame_no": image_id,
-                "stream_id": 1,
+                "object_id": object_id,
+                "stream_id": source_id,
                 "event_video": encode_video_to_bytes(video_path),
-                "event_id": 30
+                "event_id": 23
             }
 
-            video_payload_for_db = [(record2['frame_no'], datetime.now(), 'LIVE', video_path)]
+            video_payload_for_db = [(record2['frame_no'], object_id, datetime.now(), 'LIVE', video_path)]
             self.db_manager.insert_videorecords(video_payload_for_db)
 
             if publish_message(record2):
@@ -211,23 +193,38 @@ class MP4Handler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
+    
+    # Create a rotating file handler
+    handler = RotatingFileHandler(
+        './logs/video_payloads_kombu.log', 
+        mode='a',  # Append mode
+        maxBytes=3 * 1024 * 1024,  # 3 MB size limit
+        backupCount=10  # Optional: number of backup logs to keep
+    )
 
     # Configure the logger
     logging.basicConfig(
         level=logging.DEBUG,  # Set the logging level
         format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-        handlers=[
-            logging.FileHandler('./logs/storage_manager_kombu.log'),  # Log messages to a file
-            logging.StreamHandler() # Also log to console
-        ]
+        handlers=[handler]
+        
+        # handlers=[
+        #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
+        #     logging.StreamHandler()
+        # ]
     )
 
     # Create a logger object
     logger = logging.getLogger(__name__)
-    # logging.getLogger("pika").setLevel(logging.WARNING)
+    logging.getLogger("watchdog").setLevel(logging.WARNING)
     logging.getLogger("sqlite3").setLevel(logging.WARNING)
+    logging.getLogger("subprocess").setLevel(logging.WARNING)
 
-    db_manager = DatabaseManager('./videologs.db')  # Set the actual path to your database
+
+    today_date = datetime.now().strftime("%d-%m-%y")
+    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
+
+    db_manager = DatabaseManager(db_name)  # Set the actual path to your database
     # channel = connect_rabbitmq()
 
     #KOMBU connection here
@@ -246,13 +243,13 @@ if __name__ == "__main__":
     }
     
     current_date = datetime.now().strftime("%d-%m-%Y")
-    path = f"/home/mtx003/BAHRAIN_RELEASE_V2/P3/violation_records/{current_date}/videos"
+    path = f"/home/mtx003/data/{current_date}/videos"
     
     while not os.path.exists(path):
         logger.info(f"Waiting for directory {path} to be created...")
         time.sleep(5)
     
-    print(f"Directory {path} exists. Starting observer.")
+    logger.info(f"Directory {path} exists. Starting observer.")
     event_handler = MP4Handler(db_manager)
     observer = Observer()
     observer.schedule(event_handler, path, recursive=False)

@@ -3,7 +3,10 @@ import time
 import sys
 import json
 import base64
+
 import logging
+from logging.handlers import RotatingFileHandler
+
 import os
 import cv2
 from kombu import Connection, Queue, Producer, Exchange
@@ -61,6 +64,7 @@ def publish_message(payload):
 
 # Function to update status in the SQLite database for payloads
 def update_payload_status(conn, record_id, new_status):
+    
     try:
         cursor = conn.cursor()
         cursor.execute("UPDATE payloads SET status = ? WHERE id = ?", (new_status, record_id))
@@ -78,6 +82,18 @@ def update_status(conn, record_id, new_status):
         logger.info(f"Updated record {record_id} to status {new_status}")
     except Exception as e:
         logger.error(f"Failed to update status in SQLite: {e}")
+
+# Function to encode image in base64
+def encode_image_to_bytes(image_path):
+    try:
+        logger.debug(f"Encoding image at path: {image_path}")
+        with open(image_path, 'rb') as image_file:
+            encoded_bytes = base64.b64encode(image_file.read()).decode('utf-8')
+            logger.info(f"Image encoded successfully: {image_path}")
+            return encoded_bytes
+    except Exception as e:
+        logger.error(f"Failed to encode image: {image_path}, error: {e}")
+        return None
 
 # Function to encode video in base64
 def encode_video_to_bytes(video_path):
@@ -98,14 +114,21 @@ def check_and_send_payloads(conn):
     logger.info("===== METADATA PAYLOADS =====")
 
     cursor = conn.cursor()
-    cursor.execute("SELECT id, status, data FROM payloads WHERE status = 'HISTORY'")
+    cursor.execute("SELECT * FROM payloads WHERE status = 'HISTORY'")
     records = cursor.fetchall()
     # logger.info(f'{records}')
-    
+
     for record in records:
-        record_id = record[0]
+        record = json.loads(record[3])
+        logger.info(record)
+
+        if "fov_bright" in record:
+            record["fov_bright"] = encode_image_to_bytes(record["fov_bright"])
+
+        if "fov_dark" in record:
+            record["fov_dark"] = encode_image_to_bytes(record["fov_dark"])
+
         payload = record
-        data = record[2]
 
         # if rabbitmq_channel and send_to_rabbitmq(rabbitmq_channel, str(payload)):
         if publish_message(payload):
@@ -121,13 +144,11 @@ def check_and_send_videos(conn):
 
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, videopath FROM videos WHERE status = 'STORAGE'")
+        cursor.execute("SELECT id, videopath FROM videos WHERE status = 'HISTORY'")
         records = cursor.fetchall()
     except sqlite3.OperationalError as e:
         logger.error("Database error: %s", e)
         return  # Exit the function if the table does not exist or an error occurs
-    
-    print(records)
 
     for record in records:
         record_id = record[0]
@@ -140,7 +161,7 @@ def check_and_send_videos(conn):
             "frame_no": image_id,
             "stream_id": 1,
             "event_video": encode_video_to_bytes(video_path),
-            "event_id": 30
+            "event_id": 23
         }
 
         # Send the payloads as a JSON string
@@ -150,7 +171,6 @@ def check_and_send_videos(conn):
         # if rabbitmq_channel and send_to_rabbitmq(rabbitmq_channel, payload_str):
         if publish_message(video_payload):
             update_status(conn, record_id, 'STORAGE')
-            logger.info(f"Video Payload Sent {record_id} from {video_path}")
         else:
             time.sleep(5)  # Wait for 5 seconds before trying again
 
@@ -158,8 +178,7 @@ def check_and_send_videos(conn):
 def monitor_db():
 
     today_date = datetime.now().strftime("%d-%m-%y")
-    db_name = f'./database_records/videologs_{today_date}.db'
-
+    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
 
     try:
         logger.info("Trying to connect to db")
@@ -171,7 +190,7 @@ def monitor_db():
     try:
         while True:
             check_and_send_payloads(conn)
-            check_and_send_videos(conn)
+            # check_and_send_videos(conn)
             time.sleep(5)  # Check every 5 seconds
     except KeyboardInterrupt:
         logger.error("Program terminated.")
@@ -181,14 +200,24 @@ def monitor_db():
 
 if __name__ == "__main__":
 
+    # Create a rotating file handler
+    handler = RotatingFileHandler(
+        './logs/history_status_kombu.log', 
+        mode='a',  # Append mode
+        maxBytes=3 * 1024 * 1024,  # 3 MB size limit
+        backupCount=10  # Optional: number of backup logs to keep
+    )
+
     # Configure the logger
     logging.basicConfig(
         level=logging.DEBUG,  # Set the logging level
         format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-        handlers=[
-            logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
-            logging.StreamHandler()
-        ]
+        handlers=[handler]
+        
+        # handlers=[
+        #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
+        #     logging.StreamHandler()
+        # ]
     )
 
     # Create a logger object

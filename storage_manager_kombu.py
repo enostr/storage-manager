@@ -10,6 +10,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import traceback
+from logging.handlers import RotatingFileHandler
 
 class DatabaseManager:
     """Handles database creation, saving, and updating."""
@@ -223,7 +224,7 @@ queue = Queue('bahrain.detection.ai.testing', exchange, routing_key='bahrain.det
 
 # Connection parameters
 connection_params = {
-    'hostname': '192.168.134.117',
+    'hostname': '192.168.134.117', #'202.88.232.230',
     'port': 45701,
     'userid': 'user',
     'password': 'zSfC5GT2NWZdLxeR',
@@ -243,6 +244,64 @@ def encode_image_to_bytes(image_path):
         logger.error(f"Failed to encode image: {image_path}, error: {e}")
         return None
 
+# def create_connection():
+
+#     global conn
+#     connection_url = (
+#         f"amqp://{connection_params['userid']}:{connection_params['password']}@"
+#         f"{connection_params['hostname']}:{connection_params['port']}/"
+#         f"{connection_params['virtual_host']}?heartbeat={connection_params['heartbeat']}"
+#     )
+    
+#     try:
+#         conn = Connection(connection_url)
+#         conn.connect()  # Establish connection
+#         logger.info("Connection established successfully.")
+#         return True
+
+#     except Exception as e:
+#         logger.error(f"Failed to establish connection: {e}")
+#         return False
+
+
+# def publish_message(payload):
+
+#     if conn is None:
+#         logger.error("Connection is not established. Cannot publish message.")
+#         return False
+
+#     try:
+#         # Convert payload to JSON string
+#         payload_str = json.dumps(payload)
+
+#         # Create a producer
+#         producer = Producer(conn)
+
+#         # Publish the message with properties
+#         producer.publish(
+#             payload_str,
+#             exchange=exchange,
+#             routing_key='bahrain.detection.queue.key',
+#             headers={"__TypeId__": "in.trois.bahrain.poc.request.payload.BahrainDetectionsRequestPayload"},
+#             content_type='application/json',
+#             delivery_mode=2  # Make the message persistent
+#         )
+#         logger.info("Message published successfully.")
+#         return True
+
+#     except Exception as e:
+#         logger.error(f"Failed to publish message: {e}")
+#         return False
+
+# def close_connection():
+
+#     global conn
+#     if conn:
+#         conn.release()  # Release the connection back to the pool
+#         conn = None
+#         logger.info("Connection closed successfully.")
+
+
 def scale_bounding_box(bbox, original_size=(1920, 1080), target_size=(3840, 2160)):
     logger.info(" SCALING BOUNDING BOX %s",bbox)
     """Scale bbox"""
@@ -252,7 +311,7 @@ def scale_bounding_box(bbox, original_size=(1920, 1080), target_size=(3840, 2160
     scale_x = target_width / original_width
     scale_y = target_height / original_height
 
-    x_min, y_min, x_max, y_max = map(int, bbox)
+    x_min, y_min, x_max, y_max =  map(int, bbox)
     scaled_bbox = (
         int(x_min * scale_x),
         int(y_min * scale_y),
@@ -277,7 +336,7 @@ def publish_message(payload):
     try:
         # Convert payload to JSON string
         payload_str = json.dumps(payload)
-        logger.debug(f"Payload string to send: {payload_str}")
+        # logger.debug(f"Payload string to send: {payload_str}")
 
         # Create the connection URL with heartbeat
         connection_url = f"amqp://{connection_params['userid']}:{connection_params['password']}@{connection_params['hostname']}:{connection_params['port']}/{connection_params['virtual_host']}?heartbeat={connection_params['heartbeat']}"
@@ -308,6 +367,11 @@ def main():
 
     device = 'RLVDS'
     device_id = get_device_id(device)
+
+    today_date = datetime.now().strftime("%d-%m-%y")
+    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
+
+    # create_connection()
 
     logger.info("----STARTING---STORAGE---MANAGER----")
 
@@ -344,8 +408,9 @@ def main():
     try:
         data_receiver = ReceiveData("ipc:///tmp/MTX_out")
         image_storage = ImageStorage("/home/mtx003/data")
+
         # SQLite database manager
-        db_manager = DatabaseManager('/home/mtx003/data/videologs.db')
+        db_manager = DatabaseManager(db_name)
 
         # channel =  connect_rabbitmq()
 
@@ -367,160 +432,175 @@ def main():
                     hdhe_image_base64 = images_json["images"][0]
                     hdle_image_base64 = images_json["images"][2]
 
-                    payload = images_json["metadata"]
+                    payloads = images_json["metadata"]
+                    timestamp = images_json["timestamp"]
+                    #print(payload) 
 
-                    # logger.info("#[storage manager] payload => ",payload, len(payload), images_json.keys())
-                    logger.info("#[storage manager] payload => %s, Length: %s, Keys: %s", payload, len(payload), images_json.keys())
+                    if payloads != 'null':
 
-                    if payload != 'null':
+                        for payload in payloads:
 
-                        # Save images
-                        hdhe_image_path, hdle_image_path = image_storage.save_images(hdhe_image_base64,hdle_image_base64)
-                        if not hdhe_image_path or not hdle_image_path:
-                            logger.error("#[storage manager] Image saving failed.")
-                            continue
-                        record_list = []
+                            # logger.info("#[storage manager] payload => ",payload, len(payload), images_json.keys())
+                            logger.info("#[storage manager] payload => %s, Length: %s, Keys: %s", payload, len(payload), images_json.keys())
 
-                        # for i in payload:
-                        coords = payload['coords']
-                        if coords != "null":
-                            coords_scaled = scale_bounding_box(coords)
-                        else:
-                            logger.error("#[storage manager] coords null.")
-                        label = payload['label']
+                            # Save images
+                            hdhe_image_path, hdle_image_path = image_storage.save_images(hdhe_image_base64,hdle_image_base64)
+                            if not hdhe_image_path or not hdle_image_path:
+                                logger.error("#[storage manager] Image saving failed.")
+                                continue
+                            record_list = []
 
-                        if label in vehicle_list:
-                            match_id = [1] # [id for id, vehicle in vehicle_list.items() if vehicle == label]
-                        elif label in violation_list.values():
-                            match_id = [id for id, violation in violation_list.items() if violation == label]
-                        else:
-                            match_id = [1]
+                            # for i in payload:
+                            coords = payload['coords']
+                            if coords != "null":
+                                coords_scaled = scale_bounding_box(coords)
+                            else:
+                                logger.error("#[storage manager] coords null.")
+                                coords_scaled = [0,0,0,0]
+                            label = payload['label']
 
-                        record = (
-                            f'{images_json["ImageId"]}',
-                            f'{match_id[0]}',
-                            f'{label}_{payload["objectid"]}', 
-                            datetime.now(), 
-                            payload['objectid'], 
-                            "MTXcam1", 
-                            "HISTORY", 
-                            label, 
-                            payload['lane'], 
-                            f"{coords_scaled}",
-                            payload['direction'], 
-                            payload['speed'], 
-                            payload['stoped_duration'], 
-                            hdhe_image_path, 
-                            hdle_image_path, 
-                            "./HDHE/", 
-                            "./HDLE/",
-                            "./videopath/"
-                        )
+                            if label in vehicle_list:
+                                match_id = [1] # [id for id, vehicle in vehicle_list.items() if vehicle == label]
+                            elif label in violation_list.values():
+                                match_id = [id for id, violation in violation_list.items() if violation == label]
+                            else:
+                                match_id = [1]
 
-                        if payload['speed'] != 'null':
-                            logger.info('#[storage manager] - speed payload')
-                            #SPEED
-                            record2 = {
-                                "device_id": device_id,
-                                #"fov_bright" : [],
-                                #"fov_dark": [],                                
-                                #"event_video" : [],
-                                "frame_no"  : f'{images_json["ImageId"]}',
-                                "stream_id" : 1,
-                                "object_id" : f'{payload["objectid"].split("_")[0]}',
-                                "speed" : f'{payload[result]["speed"]}',
-                                #"vehicle_class": '',
-                                #"box_coord": [],
-                                "detected_at": int(time.time()), #f'{datetime.now()}',
-                                #"detection_confidence": 0,
-                                "event_id": 22,
-                                #"tracker_confidence": 0,           
-                            }
+                            record = (
+                                f'{images_json["ImageId"]}',
+                                f'{match_id[0]}',
+                                f'{label}_{payload["objectid"]}', 
+                                int(time.time()), 
+                                payload['objectid'], 
+                                "MTXcam1", 
+                                "HISTORY", 
+                                label, 
+                                payload['lane'], 
+                                f"{coords_scaled}",
+                                payload['direction'], 
+                                payload['speed'], 
+                                payload['stoped_duration'], 
+                                hdhe_image_path, 
+                                hdle_image_path, 
+                                "./HDHE/", 
+                                "./HDLE/",
+                                "./videopath/"
+                            )
 
-                            logger.info("SPEED === === === == === === ")
-                            logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
-                            logger.info("DEVICE ID", device_id)
-                            logger.info("IMAGE ID", images_json["ImageId"], "OBJECT ID", payload["objectid"].split("_")[0])
-                            logger.info("VIOLATION", label)
-                            logger.info("TIMESTAMP", time.time())
-                            logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
-                        
-                        elif label in violation_list.values():
-                            logger.info('#[storage manager] - event payload')
-                            #event
-                            record2 = {
-                                "device_id": device_id,
-                                "frame_no"  : int(images_json["ImageId"]),
-                                "stream_id" : 1,
-                                "object_id" : int(f'{payload["objectid"].split("_")[0]}'),
-                                "speed" : 0,
-                                "vehicle_class": '',
-                                "box_coord": coords_scaled,
-                                "detected_at": int(time.time()), #f'{datetime.now().strftime("%A, %B %d, %Y %I:%M %p")}',
-                                "detection_confidence": 0.65478515625,
-                                "event_id": match_id[0],
-                                "tracker_confidence": 1.0,
-                                "fov_bright" : encode_image_to_bytes(hdhe_image_path), #"fov image in bytes",
-                                #"fov_dark": [0], #f'{encode_image_to_bytes(hdle_image_path)}',                                
-                                #"event_video" : encode_video_to_bytes("./sample_video/mtx.mp4")
-                            }
+                            if payload['speed'] != 'null':
+                                logger.info('#[storage manager] - speed payload')
+                                #SPEED
+                                record2 = {
+                                    "device_id": device_id,
+                                    #"fov_bright" : [],
+                                    #"fov_dark": [],                                
+                                    #"event_video" : [],
+                                    "frame_no"  : int(f'{images_json["ImageId"]}'),
+                                    "stream_id" : 1,
+                                    "object_id" : int(f'{payload["objectid"].split("_")[0]}'),
+                                    "speed" : int(f'{payload["speed"]}'),
+                                    #"vehicle_class": '',
+                                    #"box_coord": [],
+                                    "detected_at": int(time.time()), #f'{datetime.now()}',
+                                    #"detection_confidence": 0,
+                                    "event_id": 22,
+                                    #"tracker_confidence": 0,           
+                                }
 
-                            logger.info("VIOLATION === time === === == === === ")
-                            logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
-                            logger.info("DEVICE ID: %s", device_id)
-                            logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
-                            logger.info("VIOLATION: %s", label)
-                            logger.info("TIMESTAMP: %s", time.time())
-                            # logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
-                        
-                        elif label in vehicle_list:
-                            logger.info('#[storage manager] - ANPR payload')
-                            #ALL ANPR
-                            record2 = {
-                                "device_id": device_id,
-                                #"event_video" : [],
-                                "stream_id" : 1,
-                                "frame_no"  : int(images_json["ImageId"]),
-                                "object_id" : int(f'{payload["objectid"].split("_")[0]}'),
-                                "speed" : 0,
-                                "vehicle_class": label,
-                                "box_coord": coords_scaled,
-                                "detected_at": int(time.time()), #f'{datetime.now()}',
-                                "detection_confidence": 0.65478515625,
-                                "event_id": match_id[0],
-                                "tracker_confidence": 1.0,           
-                                "fov_bright" : encode_image_to_bytes(hdhe_image_path), #[f'{encode_image_to_bytes(hdhe_image_path)}'], #"fov image in bytes",
-                                "fov_dark": encode_image_to_bytes(hdle_image_path),                                
-                            }
+                                logger.info("SPEED === === === == === === ")
+                                logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
+                                logger.info("DEVICE ID: %s", device_id)
+                                logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
+                                logger.info("VIOLATION: %s", label)
+                                logger.info("TIMESTAMP: %s", time.time())
+                                #logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                            
+                            elif label in violation_list.values():
+                                logger.info('#[storage manager] - event payload')
+                                #event
+                                record2 = {
+                                    "device_id": device_id,
+                                    "frame_no"  : int(images_json["ImageId"]),
+                                    "stream_id" : 1,
+                                    "object_id" : int(f'{payload["objectid"].split("_")[0]}'),
+                                   # "speed" : 0,
+                                    "lane"   :  int(f'{payload["lane"]}'),
+                                    "vehicle_class": '',
+                                    "box_coord": coords_scaled,
+                                    "detected_at": int(time.time()), #f'{datetime.now().strftime("%A, %B %d, %Y %I:%M %p")}',
+                                    "detection_confidence": 0.65478515625,
+                                    "event_id": match_id[0],
+                                    "tracker_confidence": 1.0,
+                                    "fov_bright" : encode_image_to_bytes(hdhe_image_path), #"fov image in bytes",
+                                    "fov_dark": encode_image_to_bytes(hdle_image_path), #f'{encode_image_to_bytes(hdle_image_path)}',                                
+                                    #"event_video" : encode_video_to_bytes("./sample_video/mtx.mp4")
+                                }
 
-                            logger.info("ALL ANPR === === === == === === ")
-                            logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
-                            logger.info("DEVICE ID: %s", device_id)
-                            logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
-                            logger.info("VIOLATION: %s", label)
-                            logger.info("TIMESTAMP: %s", time.time())
-                            logger.info("IMAGE SIZE: %s KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                                logger.info("VIOLATION === time === === == === === ")
+                                logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
+                                logger.info("DEVICE ID: %s", device_id)
+                                logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
+                                logger.info("VIOLATION: %s", label)
+                                logger.info("TIMESTAMP: %s", time.time())
+                                # logger.info("IMAGE SIZE: %.2f KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                            
+                            elif label in vehicle_list:
+                                logger.info('#[storage manager] - ANPR payload')
+                                #ALL ANPR
+                                record2 = {
+                                    "device_id": device_id,
+                                    #"event_video" : [],
+                                    "stream_id" : 1,
+                                    "frame_no"  : int(images_json["ImageId"]),
+                                    "object_id" : int(f'{payload["objectid"].split("_")[0]}'),
+                                   # "speed" : 0,
+                                    "lane"   :  int(f'{payload["lane"]}'),
+                                    "vehicle_class": label,
+                                    "box_coord": coords_scaled,
+                                    "detected_at": int(time.time()), #f'{datetime.now()}',
+                                    "detection_confidence": 0.65478515625,
+                                    "event_id": match_id[0],
+                                    "tracker_confidence": 1.0,           
+                                    "fov_bright" : encode_image_to_bytes(hdhe_image_path), #[f'{encode_image_to_bytes(hdhe_image_path)}'], #"fov image in bytes",
+                                    "fov_dark": encode_image_to_bytes(hdle_image_path),                                
+                                }
 
-                        # Insert violation records into the database
-                        record_list.append(record)
-                        last_violation_id = db_manager.insert_violations(record_list)
-                        
-                        # Insert payloads
-                        # payload_record_list = [(last_violation_id, 'LIVE', json.loads(json.dumps(record2)))]#str(record)) for record in record2]
+                                logger.info("ALL ANPR === === === == === === ")
+                                logger.info(f"#[storage manager] Received Data => ImageId: {images_json['ImageId']}, Metadata: {images_json['metadata']}")
+                                logger.info("DEVICE ID: %s", device_id)
+                                logger.info("IMAGE ID: %s, OBJECT ID: %s", images_json["ImageId"], payload["objectid"].split("_")[0])
+                                logger.info("VIOLATION: %s", label)
+                                logger.info("TIMESTAMP: %s", time.time())
+                                #logger.info("IMAGE SIZE: %s KB", len(encode_image_to_bytes(hdhe_image_path).encode('utf-8')) / 1024)
+                                #logger.info("event_id", match_id[0])
 
-                        payload_record_for_db = [(last_violation_id, 'LIVE', json.dumps(record2))]
-                        db_manager.insert_payloads(payload_record_for_db)
+                            # Insert violation records into the database
+                            record_list.append(record)
+                            last_violation_id = db_manager.insert_violations(record_list)
+                            
+                            # Insert payloads
+                            # payload_record_list = [(last_violation_id, 'LIVE', json.loads(json.dumps(record2)))]#str(record)) for record in record2]
+                            
+                            if "fov_bright" in record2:
+                                record2["fov_bright"] = hdhe_image_path
 
-                        # Specify the keys to print
-                        keys_to_print = ["device_id", "frame_no", "stream_id", "object_id", "speed", "vehicle_class", "box_coord", "detected_at", "detection_confidence", "event_id", "tracker_confidence" ]
+                            if "fov_dark" in record2:
+                                record2["fov_dark"] = hdle_image_path
+                            
+                            payload_record_for_db = [(last_violation_id, 'LIVE', json.dumps(record2))]
+                            db_manager.insert_payloads(payload_record_for_db)
 
-                        if publish_message(record2):  # , hdhe_image_path, hdle_image_path):
-                            status = 'STORAGE'
-                        else:
-                            status = 'HISTORY'
-                        
-                        db_manager.update_payload_status(last_violation_id, status)
-                        logger.info("#[storage manager]",f"Record updated with status {status} ---------------------------------------------------------------------------")
+                            # Specify the keys to print
+                            keys_to_print = ["device_id", "frame_no", "stream_id", "object_id", "speed", "vehicle_class", "box_coord", "detected_at", "detection_confidence", "event_id", "tracker_confidence" ]
+
+                            # Attempt to send to kombu and update status
+                            if publish_message(record2):
+                                status = 'STORAGE'
+                            else:
+                                status = 'HISTORY'
+                            
+                            db_manager.update_payload_status(last_violation_id, status)
+                            logger.info(f"#[storage manager] == Record updated with status {status} ---------------------------------------------------------------------------")
                     else:
                         continue
                         
@@ -538,6 +618,7 @@ def main():
                 # No data received, continue loop
                 pass
         db_manager.close()
+        close_connection()
 
     except KeyboardInterrupt:
         logger.error("#[storage manager] Process interrupted by user.")
@@ -548,14 +629,24 @@ def main():
 
 if __name__ == "__main__":
 
+    # Create a rotating file handler
+    handler = RotatingFileHandler(
+        './logs/storage_manager_kombu.log', 
+        mode='a',  # Append mode
+        maxBytes=3 * 1024 * 1024,  # 3 MB size limit
+        backupCount=10  # Optional: number of backup logs to keep
+    )
+
     # Configure the logger
     logging.basicConfig(
         level=logging.DEBUG,  # Set the logging level
         format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-        handlers=[
-            logging.FileHandler('./logs/storage_manager_kombu.log'),  # Log messages to a file
-            logging.StreamHandler() # Also log to console
-        ]
+        handlers=[handler]
+        
+        # handlers=[
+        #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
+        #     logging.StreamHandler()
+        # ]
     )
 
     # Create a logger object
