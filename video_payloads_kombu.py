@@ -4,11 +4,12 @@ import sqlite3
 import json
 import base64
 from datetime import datetime
-import subprocess
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from kombu import Connection, Queue, Producer, Exchange
-import pika
+# import pika
+
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -114,6 +115,7 @@ def publish_message(payload):
         # Establish a connection and publish the message
         with Connection(connection_url) as conn:
             logger.info("Connection established successfully.")
+
             # Create a producer
             producer = Producer(conn)
 
@@ -127,6 +129,7 @@ def publish_message(payload):
                 delivery_mode=2  # Make the message persistent
             )
             logger.info("Message published successfully.")
+            time.sleep(5)
         return True
 
     except Exception as e:
@@ -143,7 +146,7 @@ class MP4Handler(FileSystemEventHandler):
             file_name = os.path.basename(event.src_path)
             logger.info(f"New MP4 file detected: {file_name}")
 
-            time.sleep(1)  # Adjust this delay if necessary
+            time.sleep(0.5)  # Adjust this delay if necessary
 
             self.vid_payload(event.src_path, file_name)
 
@@ -157,21 +160,24 @@ class MP4Handler(FileSystemEventHandler):
             if len(parts) < 2:
                 logger.error(f"Filename format not as expected: {file_name}")
                 return
+            
+            logger.info(parts)
 
             # Split the second part to extract image_id and source_id
             image_id = parts[1].split('_')[0]  # frame no
             source_id = parts[1].split('_')[1]  # mtx or ptz
             object_id = parts[1].split('_')[2]  # object id
+            device_id = parts[1].split('_')[3]
 
             # Video Payload
             record2 = {
-                "device_id": 1,
-                "frame_no": image_id,
+                "device_id": device_id,
                 "object_id": object_id,
-                "stream_id": source_id,
                 "event_video": encode_video_to_bytes(video_path),
                 "event_id": 23
             }
+
+            logger.info(f'{device_id}, {record2["object_id"]}, {record2["stream_id"]}, {record2["frame_no"]}')
 
             video_payload_for_db = [(record2['frame_no'], object_id, datetime.now(), 'LIVE', video_path)]
             self.db_manager.insert_videorecords(video_payload_for_db)
@@ -220,7 +226,6 @@ if __name__ == "__main__":
     logging.getLogger("sqlite3").setLevel(logging.WARNING)
     logging.getLogger("subprocess").setLevel(logging.WARNING)
 
-
     today_date = datetime.now().strftime("%d-%m-%y")
     db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
 
@@ -234,7 +239,7 @@ if __name__ == "__main__":
 
     # Connection parameters
     connection_params = {
-        'hostname': '192.168.134.117',
+        'hostname': '192.168.134.248',#'192.168.134.117',
         'port': 45701,
         'userid': 'user',
         'password': 'zSfC5GT2NWZdLxeR',

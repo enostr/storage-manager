@@ -3,15 +3,12 @@ import time
 import sys
 import json
 import base64
-
+from pathlib import path
 import logging
 from logging.handlers import RotatingFileHandler
 
-import os
-import cv2
 from kombu import Connection, Queue, Producer, Exchange
 from datetime import datetime
-import numpy as np
 import traceback
 
 #KOMBU connection here
@@ -22,7 +19,7 @@ queue = Queue('bahrain.detection.ai.testing', exchange, routing_key='bahrain.det
 
 # Connection parameters
 connection_params = {
-    'hostname': '192.168.134.117',
+    'hostname': '192.168.134.248', #'192.168.134.117',
     'port': 45701,
     'userid': 'user',
     'password': 'zSfC5GT2NWZdLxeR',
@@ -30,11 +27,20 @@ connection_params = {
     'heartbeat': 60,  # Set heartbeat to 60 seconds
 }
 
+# def decode_message(payload_str):
+#     video = json.loads(payload_str)
+    
+#     fin_vid = base64.b64decode(video.get("event_video")) #.decode('utf-8')
+
+#     with open("fin_vid.mp4", 'wb') as video_file:
+#         video_file.write(fin_vid)
+#         logging.info("Successfully decoded and saved the video.")
+
 def publish_message(payload):
     try:
         # Convert payload to JSON string
         payload_str = json.dumps(payload)
-        logger.debug(f"Payload string to send: {payload_str}")
+        #logger.debug(f"Payload string to send: {payload_str}")
 
         # Create the connection URL with heartbeat
         connection_url = f"amqp://{connection_params['userid']}:{connection_params['password']}@{connection_params['hostname']}:{connection_params['port']}/{connection_params['virtual_host']}?heartbeat={connection_params['heartbeat']}"
@@ -54,8 +60,11 @@ def publish_message(payload):
                 content_type='application/json',
                 delivery_mode=2  # Make the message persistent
             )
+            # logger.info(payload_str)
             logger.info("Message published successfully.")
-            time.sleep(3)
+            # decode_message(payload_str)
+            time.sleep(5)
+            sys.exit(1)
         return True
 
     except Exception as e:
@@ -119,8 +128,8 @@ def check_and_send_payloads(conn):
     # logger.info(f'{records}')
 
     for record in records:
+        record_id = record[1]
         record = json.loads(record[3])
-        logger.info(record)
 
         if "fov_bright" in record:
             record["fov_bright"] = encode_image_to_bytes(record["fov_bright"])
@@ -154,21 +163,34 @@ def check_and_send_videos(conn):
         record_id = record[0]
         video_path = record[1]
 
+        logger.info(video_path)
+
+        # Extract and split the filename
+        parts = path.split('/')[-1].split('.')[0].split('_')
+
+        # Extract values based on the parts
+        image_id = parts[2]       # Extracts '3888' as the image/frame number
+        source_id = parts[3]      # Extracts 'mtx' as the source identifier
+        object_id = parts[4]      # Extracts '11707' as the object ID
+        device_id = parts[5]      # Extracts '0' as the device ID
+
         # Create video payload
         image_id = video_path.split('__')[1].split('_')[0]  # Extracting image_id
+
+        # video_payload = {
+        #     "device_id": 2,
+        #     "object_id": 2829,
+        #     "event_video": encode_video_to_bytes(video_path),
+        #     "event_id": 23
+        # }
+
         video_payload = {
-            "device_id": 1,
-            "frame_no": image_id,
-            "stream_id": 1,
+            "device_id": device_id,
+            "object_id": object_id,
             "event_video": encode_video_to_bytes(video_path),
             "event_id": 23
         }
 
-        # Send the payloads as a JSON string
-        payload_str = json.dumps(video_payload)  # Convert dict to JSON string
-        logger.info(payload_str)
-
-        # if rabbitmq_channel and send_to_rabbitmq(rabbitmq_channel, payload_str):
         if publish_message(video_payload):
             update_status(conn, record_id, 'STORAGE')
         else:
@@ -178,7 +200,7 @@ def check_and_send_videos(conn):
 def monitor_db():
 
     today_date = datetime.now().strftime("%d-%m-%y")
-    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
+    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'    
 
     try:
         logger.info("Trying to connect to db")
@@ -190,7 +212,7 @@ def monitor_db():
     try:
         while True:
             check_and_send_payloads(conn)
-            # check_and_send_videos(conn)
+            check_and_send_videos(conn)
             time.sleep(5)  # Check every 5 seconds
     except KeyboardInterrupt:
         logger.error("Program terminated.")
@@ -212,7 +234,7 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.DEBUG,  # Set the logging level
         format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-        handlers=[handler]
+        handlers=[handler, logging.StreamHandler()]
         
         # handlers=[
         #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
@@ -222,6 +244,8 @@ if __name__ == "__main__":
 
     # Create a logger object
     logger = logging.getLogger(__name__)
+    logging.getLogger("kombu").setLevel(logging.WARNING)
     logging.getLogger("sqlite3").setLevel(logging.WARNING)
+
 
     monitor_db()
