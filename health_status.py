@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import datetime
 import sqlite3
+import random
 # from datetime import datetime
 from kombu import Connection, Queue, Producer, Exchange
 import logging
@@ -217,23 +218,40 @@ def permanent_storage_used(mount_point):
     else:
         logger.error(f"Failed to calculate data usage for {mount_point}")
 
+def gen_last_digit():
+    return random.randint(11,99)
+
+def get_latitude_longitude(device):
+
+    match device:
+        case 'FR':
+            latitude = f'26.136{gen_last_digit()}'
+            longitude = f'50.527{gen_last_digit()}'
+
+        case 'RLVDS':
+            latitude = f'26.136{gen_last_digit()}'
+            longitude = f'50.527{gen_last_digit()}'
+
+        case 'SVDS':
+            latitude = f'26.2822{gen_last_digit()}'
+            longitude = f'50.6486{gen_last_digit()}'
+ 
+    return float(latitude), float(longitude)
+
 def main():
 
     # channel =  connect_rabbitmq()
 
     today_date = datetime.now().strftime("%d-%m-%y")
-    # db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
-    db_name = './videologs_17-10-24.db'
-
+    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
     mount_point = "/home/mtx003/data"
-
-    # db_path = '/home/mtx003/data/videologs.db'
+    device_name = 'RLVDS'
 
     while True:
 
         ####payload structure for health packet
         health_payload = {
-            "device_id": get_device_id('FR'),
+            "device_id": get_device_id(device_name),
             "camera_1": check_camera_status(),
             "camera_2": check_camera_status(),
             "ai_program_uptime": get_process_uptime('P2_client'),  # Format: "HH:MM:SS"
@@ -244,10 +262,16 @@ def main():
             "permanent_storage_used": permanent_storage_used(mount_point),  # Percentage (0-100)
             "offline_data_to_sync": get_offline_data_percentage(db_name),  # Percentage (0-100)
             "health_time" : int(time.time()), #1701676735,
-            "latitude" : 13.726045,
-            "longitude" : 75.166692
+            "latitude" : get_latitude_longitude(device_name)[0],
+            "longitude" : get_latitude_longitude(device_name)[1]
         }
-        
+
+        logger.info(health_payload)
+
+        # Check Data type
+        # value_types = {key: type(value) for key, value in health_payload.items()}
+        # logger.info(value_types)
+
         publish_message(health_payload)
 
         time.sleep(10)
