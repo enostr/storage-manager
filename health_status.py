@@ -257,6 +257,8 @@ def main():
             "permanent_storage_used": permanent_storage_used(mount_point),  # Percentage (0-100)
             "offline_data_to_sync": get_offline_data_percentage(db_name),  # Percentage (0-100)
             "health_time" : int(time.time()), #1701676735,
+            "latitude" : 13.726045,
+            "longitude" : 75.166692
         }
         
         publish_message(health_payload)
