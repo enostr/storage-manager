@@ -1,6 +1,6 @@
 import os
 import subprocess
-import pika
+# import pika
 import json
 import logging
 import time
@@ -8,22 +8,8 @@ from datetime import datetime
 import sqlite3
 # from datetime import datetime
 from kombu import Connection, Queue, Producer, Exchange
-
-
-# Configure the logger
-logging.basicConfig(
-    level=logging.DEBUG,  # Set the logging level
-    format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
-    handlers=[
-        logging.FileHandler('./logs/health_status_kombu.log'),  # Log messages to a file
-        logging.StreamHandler() # Also log to console
-    ]
-)
-
-# Create a logger object
-logger = logging.getLogger(__name__)
-# logging.getLogger("pika").setLevel(logging.WARNING)
-logging.getLogger("sqlite3").setLevel(logging.WARNING)
+import logging
+from logging.handlers import RotatingFileHandler
 
 #KOMBU connection here
 
@@ -127,7 +113,7 @@ def get_folder_size(mount_point):
         
         return folder_size
     except Exception as e:
-        print(f"Error getting folder size: {e}")
+        logger.error(f"Error getting folder size: {e}")
         return None
 
 # Function to get the total available space on the file system
@@ -142,7 +128,7 @@ def get_total_space(mount_point):
         
         return total_space
     except Exception as e:
-        print(f"Error getting total space: {e}")
+        logger.error(f"Error getting total space: {e}")
         return None
 
 def get_process_uptime(process_name):
@@ -190,7 +176,7 @@ def get_offline_data_percentage(db_path):
         return round(percentage, 2)  # Round to two decimal places
 
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error(f"Database error: {e}")
         return None
 
     finally:
@@ -226,17 +212,18 @@ def permanent_storage_used(mount_point):
     # Calculate and print the percentage of used space in the directory
     if folder_size is not None and total_space is not None:
         percentage_used = (folder_size / total_space) * 100
-        # print(f"Data usage in {mount_point}: {round(percentage_used, 2)}%")
+        # logger.error(f"Data usage in {mount_point}: {round(percentage_used, 2)}%")
         return round(percentage_used, 2)
     else:
-        print(f"Failed to calculate data usage for {mount_point}")
+        logger.error(f"Failed to calculate data usage for {mount_point}")
 
 def main():
 
     # channel =  connect_rabbitmq()
 
     today_date = datetime.now().strftime("%d-%m-%y")
-    db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
+    # db_name = f'/home/mtx003/data/database_records/videologs_{today_date}.db'
+    db_name = './videologs_17-10-24.db'
 
     mount_point = "/home/mtx003/data"
 
@@ -266,4 +253,32 @@ def main():
         time.sleep(10)
 
 if __name__ == "__main__":
+
+    os.makedirs('./logs/', exist_ok=True)
+
+    # Create a rotating file handler
+    handler = RotatingFileHandler(
+        './logs/health_status_kombu.log', 
+        mode='a',  # Append mode
+        maxBytes=3 * 1024 * 1024,  # 3 MB size limit
+        backupCount=10  # Optional: number of backup logs to keep
+    )
+
+    # Configure the logger
+    logging.basicConfig(
+        level=logging.DEBUG,  # Set the logging level
+        format='%(asctime)s - %(levelname)s - %(message)s',  # Log message format
+        handlers=[handler, logging.StreamHandler()]
+        
+        # handlers=[
+        #     logging.FileHandler('./logs/history_status_kombu.log'),  # Log messages to a file
+        #     logging.StreamHandler()
+        # ]
+    )
+
+    # Create a logger object
+    logger = logging.getLogger(__name__)
+    logging.getLogger("kombu").setLevel(logging.WARNING)
+    logging.getLogger("sqlite3").setLevel(logging.WARNING)
+
     main()
